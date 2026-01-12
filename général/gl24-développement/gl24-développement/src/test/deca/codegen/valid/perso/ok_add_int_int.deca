@@ -1,0 +1,7 @@
+{
+    int a = 7;
+    int b = 5;
+    int c;
+    c = a + b;
+    println(c);
+}

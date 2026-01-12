@@ -1,0 +1,8 @@
+{
+    int a = 10;
+    int b = 3;
+    int c = 2;
+    int d;
+    d = (a + b * c - 4) / 2;
+    println(d);
+}

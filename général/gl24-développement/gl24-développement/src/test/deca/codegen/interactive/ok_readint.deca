@@ -1,0 +1,4 @@
+{
+    int u = readInt();
+    println(u);
+}

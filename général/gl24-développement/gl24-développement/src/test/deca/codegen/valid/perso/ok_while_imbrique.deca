@@ -1,0 +1,17 @@
+{
+    float x = 10;
+    float y;
+    while (x >= 1){
+        y = 0;
+        while (y < 10){
+            y = y+1;
+        }
+        x = x-1;
+    }
+    if (x == 0 && y == 10){
+        println("success");
+    }
+    else {
+        println("fail");
+    }
+}

@@ -1,0 +1,7 @@
+{
+    float a = 7.0;
+    float b = 0.0;
+    float c;
+    c = a / b;
+    println(c);
+}

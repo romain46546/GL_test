@@ -1,0 +1,7 @@
+{
+  boolean b1, b2;
+  b1 = 1 == 1;
+  b2 = 1 != 2;
+  println(b1);
+  println(b2);
+}

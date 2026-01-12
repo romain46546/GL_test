@@ -1,0 +1,10 @@
+{
+    int x;
+    x = 4;
+
+    if (x >= 4) {
+        println(5);
+    } else {
+        println(6);
+    }
+}

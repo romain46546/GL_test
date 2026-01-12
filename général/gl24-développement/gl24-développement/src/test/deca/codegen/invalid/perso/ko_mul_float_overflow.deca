@@ -1,0 +1,6 @@
+{
+    float a = 3.4e38;
+    float b = 3.4e38;
+    float c;
+    c = a * b;
+}

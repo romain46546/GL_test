@@ -1,0 +1,240 @@
+stages:
+  - sanity
+  - build
+  - test
+  - stagea
+  - verify
+
+variables:
+  MAVEN_CLI_OPTS: "--batch-mode --no-transfer-progress"
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+
+cache:
+  key: "maven-${CI_PROJECT_ID}"
+  paths:
+    - .m2/repository
+
+default:
+  image: maven:3.9.6-eclipse-temurin-21
+  tags: [docker]
+  before_script:
+    - set -euo pipefail
+    - java -version
+    - mvn -v
+
+# Pipeline:
+# - toujours pour une MR
+# - sinon seulement si on touche du "code" (ou la CI/pom)
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: always
+    - changes:
+        - .gitlab-ci.yml
+        - pom.xml
+        - src/**/*
+      when: always
+    - when: never
+
+sanity:
+  stage: sanity
+  script: |
+    set -euo pipefail
+    mvn $MAVEN_CLI_OPTS -V validate
+
+build:
+  stage: build
+  script: |
+    set -euo pipefail
+    # compile + test-compile sans exécuter les tests JUnit
+    mvn $MAVEN_CLI_OPTS -V clean test-compile -DskipTests
+
+unit_tests:
+  stage: test
+  allow_failure: true
+  script: |
+    set -euo pipefail
+    mvn $MAVEN_CLI_OPTS -V test
+
+# StageA léger, automatique sur branches "US" (tout sauf master/developpement), hors MR
+stagea_smoke:
+  stage: stagea
+  allow_failure: true
+  script: |
+    set -euo pipefail
+    mvn $MAVEN_CLI_OPTS -V -DskipTests test-compile
+
+    mkdir -p ci_logs
+    LOG="ci_logs/stagea_smoke.log"
+    echo "== StageA SMOKE ==" | tee "$LOG"
+
+    echo "== Provided hello.deca (lex+synt) ==" | tee -a "$LOG"
+    bash ./src/test/script/launchers/test_lex  src/test/deca/syntax/valid/provided/hello.deca | tee -a "$LOG"
+    bash ./src/test/script/launchers/test_synt src/test/deca/syntax/valid/provided/hello.deca | tee -a "$LOG"
+
+    # 1 test perso valid si présent
+    if [ -f src/test/deca/syntax/valid/perso/ok_minimal.deca ]; then
+      echo "== Perso ok_minimal.deca ==" | tee -a "$LOG"
+      bash ./src/test/script/launchers/test_synt src/test/deca/syntax/valid/perso/ok_minimal.deca | tee -a "$LOG"
+    fi
+
+    # 1 test perso invalid si présent (doit échouer)
+    if [ -f src/test/deca/syntax/invalid/perso/ko_bad_token_hash.deca ]; then
+      echo "== Perso ko_bad_token_hash.deca (must fail) ==" | tee -a "$LOG"
+      set +e
+      bash ./src/test/script/launchers/test_synt src/test/deca/syntax/invalid/perso/ko_bad_token_hash.deca >>"$LOG" 2>&1
+      rc=$?
+      set -e
+      if [ "$rc" -eq 0 ]; then
+        echo "UNEXPECTED PASS: ko_bad_token_hash.deca" | tee -a "$LOG"
+        exit 1
+      fi
+    fi
+
+    # Check soft du format d'erreur (file:line:col:) sans imposer les mots exacts
+    grep -Eq ':[0-9]+:[0-9]+:' "$LOG" || true
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - ci_logs/
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != "master" && $CI_COMMIT_BRANCH != "developpement"'
+      when: on_success
+    - when: never
+
+# StageA complet, BLOQUANT :
+# - push sur developpement
+# - MR -> master
+# - MR -> developpement
+stagea_full:
+  stage: stagea
+  script: |
+    set -euo pipefail
+    mvn $MAVEN_CLI_OPTS -V -DskipTests test-compile
+
+    mkdir -p ci_logs
+    LOG="ci_logs/stagea_full.log"
+    echo "== StageA FULL ==" | tee "$LOG"
+
+    run_synt () {
+      f="$1"
+      echo "== $f ==" | tee -a "$LOG"
+      if ! bash ./src/test/script/launchers/test_synt "$f" >>"$LOG" 2>&1; then
+        echo "---- tail log (debug) ----"
+        tail -n 160 "$LOG"
+        exit 1
+      fi
+    }
+
+    echo "== Provided valid ==" | tee -a "$LOG"
+    for f in src/test/deca/syntax/valid/provided/*.deca; do
+      run_synt "$f"
+    done
+
+    if ls src/test/deca/syntax/valid/perso/*.deca >/dev/null 2>&1; then
+      echo "== Perso valid ==" | tee -a "$LOG"
+      for f in src/test/deca/syntax/valid/perso/*.deca; do
+        run_synt "$f"
+      done
+    fi
+
+    if ls src/test/deca/syntax/invalid/perso/*.deca >/dev/null 2>&1; then
+      echo "== Perso invalid (must fail) ==" | tee -a "$LOG"
+      for f in src/test/deca/syntax/invalid/perso/*.deca; do
+        echo "== $f ==" | tee -a "$LOG"
+        set +e
+        bash ./src/test/script/launchers/test_synt "$f" >>"$LOG" 2>&1
+        rc=$?
+        set -e
+        if [ "$rc" -eq 0 ]; then
+          echo "UNEXPECTED PASS $f" | tee -a "$LOG"
+          tail -n 160 "$LOG"
+          exit 1
+        fi
+      done
+    fi
+
+    # Soft check format d'erreur au moins une fois
+    grep -Eq ':[0-9]+:[0-9]+:' "$LOG"
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - ci_logs/
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "developpement"'
+      when: on_success
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"'
+      when: on_success
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "developpement"'
+      when: on_success
+    - when: never
+
+# StageA complet, optionnel (manuel) sur branches US hors MR
+stagea_full_manual:
+  stage: stagea
+  allow_failure: true
+  script: |
+    set -euo pipefail
+    mvn $MAVEN_CLI_OPTS -V -DskipTests test-compile
+
+    mkdir -p ci_logs
+    LOG="ci_logs/stagea_full_manual.log"
+    echo "== StageA FULL (manual) ==" | tee "$LOG"
+
+    if ls src/test/deca/syntax/valid/perso/*.deca >/dev/null 2>&1; then
+      for f in src/test/deca/syntax/valid/perso/*.deca; do
+        echo "== $f ==" | tee -a "$LOG"
+        bash ./src/test/script/launchers/test_synt "$f" >>"$LOG" 2>&1
+      done
+    fi
+
+    if ls src/test/deca/syntax/invalid/perso/*.deca >/dev/null 2>&1; then
+      for f in src/test/deca/syntax/invalid/perso/*.deca; do
+        echo "== $f ==" | tee -a "$LOG"
+        set +e
+        bash ./src/test/script/launchers/test_synt "$f" >>"$LOG" 2>&1
+        rc=$?
+        set -e
+        if [ "$rc" -eq 0 ]; then
+          echo "UNEXPECTED PASS $f" | tee -a "$LOG"
+          exit 1
+        fi
+      done
+    fi
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - ci_logs/
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != "master" && $CI_COMMIT_BRANCH != "developpement"'
+      when: manual
+    - when: never
+
+# Verify (plus lourd) :
+# - auto sur developpement
+# - auto sur MR -> master/developpement
+# - manuel sur branches US
+# - pas sur push direct master (pour éviter du bruit tant que master est "référence stable")
+verify:
+  stage: verify
+  allow_failure: true
+  script: |
+    set -euo pipefail
+    mvn $MAVEN_CLI_OPTS -V clean verify
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "developpement"'
+      when: on_success
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"'
+      when: on_success
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "developpement"'
+      when: on_success
+    - if: '$CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != "master" && $CI_COMMIT_BRANCH != "developpement"'
+      when: manual
+    - when: never

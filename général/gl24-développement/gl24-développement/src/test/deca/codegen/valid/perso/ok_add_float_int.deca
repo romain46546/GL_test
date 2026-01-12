@@ -1,0 +1,6 @@
+{
+    float f = 1.25;
+    int i = 3;
+    float g;
+    g = f + i;
+}

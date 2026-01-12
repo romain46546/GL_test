@@ -1,0 +1,6 @@
+{
+    float x = 5.5;
+    println(x,x,x);
+    println(x);
+    println(x);
+}

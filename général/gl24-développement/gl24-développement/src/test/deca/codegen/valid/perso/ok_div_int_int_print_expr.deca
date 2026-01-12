@@ -1,0 +1,6 @@
+{
+    int a = 7;
+    int b = 2;
+    println(a / b);
+    printlnx(a / b);
+}
